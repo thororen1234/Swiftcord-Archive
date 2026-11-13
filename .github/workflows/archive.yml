@@ -1,0 +1,47 @@
+name: Archive Swiftcord
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download and archive latest DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url=$(curl -fsSIL -o /dev/null -w '%{url_effective}' https://swiftcord.app/download)
+          file=$(basename "$url")
+          if [[ ! "$file" =~ ^Swiftcord-[0-9A-Za-z._-]+\.dmg$ ]]; then
+            echo "Unexpected download filename: $file"
+            exit 1
+          fi
+          tag="${file%.dmg}"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$file is already archived"
+            exit 0
+          fi
+
+          curl -fsSL -o "$file" "$url"
+          sha256sum "$file" > "$file.sha256"
+          sha=$(cut -d' ' -f1 "$file.sha256")
+
+          gh release create "$tag" "$file" "$file.sha256" \
+            --title "$tag" \
+            --notes "Source: $url"$'\n\n'"SHA-256: \`$sha\`"
+
+          cat "$file.sha256" >> SHA256SUMS
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add SHA256SUMS
+          git commit -m "Archive $file"
+          git push
