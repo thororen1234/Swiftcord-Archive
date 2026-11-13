@@ -8,47 +8,126 @@ on:
 permissions:
   contents: write
 
+env:
+  APPCAST_URL: https://swiftcord.app/appcast.xml
+
 jobs:
   archive:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Download and archive latest DMG
+      - name: Archive new builds and deltas
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          url=$(curl -fsSIL -o /dev/null -w '%{url_effective}' https://swiftcord.app/download)
-          file=$(basename "$url")
-          if [[ ! "$file" =~ ^Swiftcord-[0-9A-Za-z._-]+\.dmg$ ]]; then
-            echo "Unexpected download filename: $file"
-            exit 1
+          save_wayback() {
+            local target="$1" link="" i
+            for i in 1 2 3; do
+              link=$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 300 "https://web.archive.org/save/$target" || true)
+              [ -n "$link" ] && break
+              sleep 60
+            done
+            echo "${link:-$target}"
+          }
+
+          archive_build() {
+            local url="$1"; shift
+            local deltas=("$@")
+            local file tag sha dfile durl dlink src_link
+            file=$(basename "${url%%\?*}")
+            if [[ ! "$file" =~ ^Swiftcord-[0-9A-Za-z._-]+\.(dmg|zip)$ ]]; then
+              echo "Skipping unexpected filename: $file"
+              return 0
+            fi
+            tag="${file%.*}"
+
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "$tag is already archived"
+              return 0
+            fi
+
+            echo "Archiving $file"
+            local work
+            work=$(mktemp -d)
+            pushd "$work" >/dev/null || return 1
+
+            curl -fsSL -o "$file" "$url" || { popd >/dev/null; return 1; }
+            sha256sum "$file" > "$file.sha256"
+            sha=$(cut -d' ' -f1 "$file.sha256")
+
+            local assets=("$file" "$file.sha256")
+            local delta_notes=""
+            : > "$tag.deltas.sha256"
+            for durl in "${deltas[@]}"; do
+              dfile=$(basename "${durl%%\?*}")
+              if [[ ! "$dfile" =~ ^[0-9A-Za-z._-]+\.delta$ ]]; then
+                echo "Skipping unexpected delta filename: $dfile"
+                continue
+              fi
+              if ! curl -fsSL -o "$dfile" "$durl"; then
+                echo "::warning::Could not download delta $durl"
+                continue
+              fi
+              sha256sum "$dfile" >> "$tag.deltas.sha256"
+              assets+=("$dfile")
+              dlink=$(save_wayback "$durl")
+              delta_notes+=$'\n'"- \`$dfile\`: \`$(sha256sum "$dfile" | cut -d' ' -f1)\` ([source]($dlink))"
+            done
+            if [ -s "$tag.deltas.sha256" ]; then
+              assets+=("$tag.deltas.sha256")
+            else
+              rm -f "$tag.deltas.sha256"
+            fi
+
+            src_link=$(save_wayback "$url")
+
+            local notes="Source: $src_link"$'\n\n'"SHA-256: \`$sha\`"
+            if [ -n "$delta_notes" ]; then
+              notes+=$'\n\n'"Deltas:$delta_notes"
+            fi
+
+            gh release create "$tag" "${assets[@]}" \
+              --title "$tag" \
+              --notes "$notes" || { popd >/dev/null; return 1; }
+
+            cat "$file.sha256" >> "$GITHUB_WORKSPACE/SHA256SUMS"
+            [ -f "$tag.deltas.sha256" ] && cat "$tag.deltas.sha256" >> "$GITHUB_WORKSPACE/SHA256SUMS"
+            popd >/dev/null
+            rm -rf "$work"
+          }
+
+          if curl -fsSL --retry 3 -o appcast.xml "$APPCAST_URL"; then
+            python3 - <<'PY' > builds.tsv
+          import xml.etree.ElementTree as ET
+
+          SP = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
+          items = ET.parse("appcast.xml").getroot().findall("./channel/item")
+          seen = set()
+          for item in reversed(items):
+              enc = item.find("enclosure")
+              if enc is None or not enc.get("url") or enc.get("url") in seen:
+                  continue
+              seen.add(enc.get("url"))
+              deltas = [d.get("url") for d in item.findall(SP + "deltas/enclosure") if d.get("url")]
+              print("\t".join([enc.get("url")] + deltas))
+          PY
+            while IFS=$'\t' read -r -a fields; do
+              [ "${#fields[@]}" -gt 0 ] || continue
+              archive_build "${fields[@]}" || echo "::warning::Failed to archive ${fields[0]}"
+            done < builds.tsv
+          else
+            echo "::warning::Could not fetch appcast; falling back to /download only"
           fi
-          tag="${file%.dmg}"
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "$file is already archived"
-            exit 0
+          dl=$(curl -fsSIL -o /dev/null -w '%{url_effective}' https://swiftcord.app/download)
+          archive_build "$dl" || echo "::warning::Failed to archive $dl"
+
+          rm -f appcast.xml builds.tsv
+          if [ -n "$(git status --porcelain SHA256SUMS)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add SHA256SUMS
+            git commit -m "Archive new Swiftcord builds"
+            git push
           fi
-
-          curl -fsSL -o "$file" "$url"
-          sha256sum "$file" > "$file.sha256"
-          sha=$(cut -d' ' -f1 "$file.sha256")
-
-          for i in 1 2 3; do
-            source=$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 300 "https://web.archive.org/save/$url")
-            [ -n "$source" ] && break
-            sleep 60
-          done
-          source=${source:-$url}
-
-          gh release create "$tag" "$file" "$file.sha256" \
-            --title "$tag" \
-            --notes "Source: $source"$'\n\n'"SHA-256: \`$sha\`"
-
-          cat "$file.sha256" >> SHA256SUMS
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add SHA256SUMS
-          git commit -m "Archive $file"
-          git push
