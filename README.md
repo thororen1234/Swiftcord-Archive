@@ -8,6 +8,7 @@ An archive of [Swiftcord](https://swiftcord.app) macOS releases.
 
 A GitHub Action checks https://swiftcord.app/download every 4 hours. When it points to a new DMG, the action:
 
+- saves it to the [Wayback Machine](https://web.archive.org/web/*/https://cdn.swiftcord.app/*) and links that capture as the release source
 - publishes the DMG and its `.sha256` file as a release tagged with the DMG name (for example `Swiftcord-87`)
 - appends the SHA-256 to [SHA256SUMS](SHA256SUMS)
 

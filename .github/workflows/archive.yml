@@ -35,9 +35,16 @@ jobs:
           sha256sum "$file" > "$file.sha256"
           sha=$(cut -d' ' -f1 "$file.sha256")
 
+          for i in 1 2 3; do
+            source=$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 300 "https://web.archive.org/save/$url")
+            [ -n "$source" ] && break
+            sleep 60
+          done
+          source=${source:-$url}
+
           gh release create "$tag" "$file" "$file.sha256" \
             --title "$tag" \
-            --notes "Source: $url"$'\n\n'"SHA-256: \`$sha\`"
+            --notes "Source: $source"$'\n\n'"SHA-256: \`$sha\`"
 
           cat "$file.sha256" >> SHA256SUMS
           git config user.name "github-actions[bot]"
