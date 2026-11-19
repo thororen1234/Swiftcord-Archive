@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  APPCAST_URL: https://swiftcord.app/appcast.xml
+  APPCAST_URL: https://cdn.swiftcord.app/appcast.xml
 
 jobs:
   archive:
