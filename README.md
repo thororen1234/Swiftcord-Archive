@@ -6,7 +6,7 @@ An archive of [Swiftcord](https://swiftcord.app) macOS releases.
 
 ## How it works
 
-A GitHub Action checks <https://swiftcord.app/download> every 4 hours. When it points to a new DMG, the action:
+A GitHub Action checks <[https://swiftcord.app/download](https://cdn.swiftcord.app/appcast.xml)> every 4 hours. When it finds a new DMG, the action:
 
 - saves it to the [Wayback Machine](https://web.archive.org/web/*/https://cdn.swiftcord.app/*) and links that capture as the release source
 - publishes the DMG and any delta files linked for that build in the appcast, with a `.sha256` file for each artifact, as a release tagged with the DMG name
